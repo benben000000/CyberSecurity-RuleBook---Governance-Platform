@@ -1,8 +1,35 @@
-import { useState } from 'react'
-import './index.css'
+import { useState, useEffect } from 'react';
+import ReactMarkdown from 'react-markdown';
+import frontMatter from 'front-matter';
+import './index.css';
+
+// Load markdown files eagerly
+const mdFiles = import.meta.glob('./content/*.md', { query: '?raw', import: 'default', eager: true });
 
 function App() {
   const [activeTab, setActiveTab] = useState('dashboard');
+  const [markdownContent, setMarkdownContent] = useState('');
+  const [frontmatter, setFrontmatter] = useState({});
+
+  useEffect(() => {
+    if (activeTab === 'dashboard' || activeTab === 'risk-register') {
+      setMarkdownContent('');
+      setFrontmatter({});
+      return;
+    }
+
+    // Try to find the matching file based on activeTab
+    const matchPath = `./content/${activeTab}.md`;
+    if (mdFiles[matchPath]) {
+      const rawContent = mdFiles[matchPath];
+      const parsed = frontMatter(rawContent);
+      setFrontmatter(parsed.attributes);
+      setMarkdownContent(parsed.body);
+    } else {
+      setMarkdownContent('## Content Not Found\nPlease create a markdown file in the `src/content` directory for this topic.');
+      setFrontmatter({});
+    }
+  }, [activeTab]);
 
   return (
     <div style={{ display: 'flex', minHeight: '100vh' }}>
@@ -48,10 +75,25 @@ function App() {
                <p style={{ color: 'var(--text-secondary)' }}>Welcome to the Governance Platform. Select a framework from the sidebar to view control mappings.</p>
              </div>
           )}
-          {activeTab !== 'dashboard' && (
+          
+          {activeTab !== 'dashboard' && activeTab !== 'risk-register' && markdownContent && (
+             <div className="markdown-body">
+               {frontmatter.title && (
+                 <div style={{ marginBottom: '20px', borderBottom: '1px solid rgba(255,255,255,0.1)', paddingBottom: '10px' }}>
+                   <span style={{ color: 'var(--accent-cyan)', fontSize: '0.9rem', fontWeight: 'bold' }}>{frontmatter.category}</span>
+                   <h1 style={{ color: 'var(--text-primary)', marginTop: '5px', fontSize: '1.5rem' }}>{frontmatter.title}</h1>
+                 </div>
+               )}
+               <div style={{ lineHeight: '1.6', color: 'var(--text-primary)' }}>
+                 <ReactMarkdown>{markdownContent}</ReactMarkdown>
+               </div>
+             </div>
+          )}
+          
+          {activeTab === 'risk-register' && (
              <div>
-               <h3 style={{ marginBottom: '15px', color: 'var(--accent-cyan)' }}>{activeTab.toUpperCase()} Controls</h3>
-               <p style={{ color: 'var(--text-secondary)' }}>Loading mapping data from CKSS markdown files...</p>
+               <h3 style={{ marginBottom: '15px', color: 'var(--accent-cyan)' }}>FAIR Risk Register</h3>
+               <p style={{ color: 'var(--text-secondary)' }}>Quantitative risk modeling visualization goes here.</p>
              </div>
           )}
         </section>
