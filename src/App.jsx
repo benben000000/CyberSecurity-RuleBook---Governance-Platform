@@ -12,6 +12,7 @@ function App() {
   const [frontmatter, setFrontmatter] = useState({});
   const [siemLogs, setSiemLogs] = useState([]);
   const [doraAlert, setDoraAlert] = useState(false);
+  const [doraResolved, setDoraResolved] = useState(false);
 
   useEffect(() => {
     if (activeTab === 'live-siem-feed') {
@@ -20,21 +21,28 @@ function App() {
         .then(text => {
           const lines = text.trim().split('\n').filter(l => l.length > 0);
           const parsedLogs = lines.map(line => {
-            try {
-              return JSON.parse(line);
-            } catch(e) {
-              return null;
-            }
+            try { return JSON.parse(line); } catch(e) { return null; }
           }).filter(l => l !== null);
           
           setSiemLogs(parsedLogs);
 
-          // Check for DORA Trigger (Event 4663 File Encryption or vssadmin execution)
-          const isCritical = parsedLogs.some(log => 
-            log.EventCode === "4663" || 
-            (log.EventCode === "4688" && log.CommandLine.includes("vssadmin"))
-          );
-          if (isCritical) setDoraAlert(true);
+          // Incident Logic
+          let isCritical = false;
+          let isResolved = false;
+
+          for (const log of parsedLogs) {
+            // Trigger 1: File Encryption or VSS Deletion
+            if (log.EventCode === "4663" || (log.EventCode === "4688" && log.CommandLine.includes("vssadmin"))) {
+              isCritical = true;
+            }
+            // Trigger 2: Containment (Process Termination of payload or WFP Block)
+            if (isCritical && (log.EventCode === "4689" && log.ProcessName.includes("darkside.exe") || log.EventCode === "5156")) {
+              isResolved = true;
+            }
+          }
+
+          setDoraAlert(isCritical && !isResolved);
+          setDoraResolved(isResolved);
         })
         .catch(err => console.error("Error fetching SIEM logs:", err));
       return;
@@ -46,7 +54,6 @@ function App() {
       return;
     }
 
-    // Try to find the matching file based on activeTab
     const matchPath = `./content/${activeTab}.md`;
     if (mdFiles[matchPath]) {
       const rawContent = mdFiles[matchPath];
@@ -91,15 +98,32 @@ function App() {
       <main style={{ flex: 1, padding: '40px' }}>
         <header style={{ display: 'flex', justifyContent: 'space-between', marginBottom: '40px' }}>
           <h2>{activeTab.toUpperCase().replace(/-/g, ' ')}</h2>
-          <div style={{ background: doraAlert ? 'rgba(239, 68, 68, 0.2)' : 'rgba(34, 211, 238, 0.1)', color: doraAlert ? 'var(--alert-red)' : 'var(--accent-cyan)', padding: '5px 15px', borderRadius: '20px', fontSize: '0.9rem', fontWeight: 'bold' }}>
-            Threat Level: {doraAlert ? 'CRITICAL' : 'ELEVATED'}
+          <div style={{ 
+            background: doraResolved ? 'rgba(34, 197, 94, 0.2)' : (doraAlert ? 'rgba(239, 68, 68, 0.2)' : 'rgba(34, 211, 238, 0.1)'), 
+            color: doraResolved ? '#22c55e' : (doraAlert ? 'var(--alert-red)' : 'var(--accent-cyan)'), 
+            padding: '5px 15px', borderRadius: '20px', fontSize: '0.9rem', fontWeight: 'bold' 
+          }}>
+            Threat Level: {doraResolved ? 'CONTAINED' : (doraAlert ? 'CRITICAL' : 'ELEVATED')}
           </div>
         </header>
 
-        {doraAlert && (
+        {doraAlert && !doraResolved && (
           <div style={{ background: 'rgba(239, 68, 68, 0.15)', border: '1px solid var(--alert-red)', padding: '20px', borderRadius: '12px', marginBottom: '30px' }}>
             <h3 style={{ color: 'var(--alert-red)', marginBottom: '10px' }}>⚠️ CRITICAL NOTIFICATION: DORA Article 19 Triggered</h3>
             <p style={{ color: 'var(--text-primary)' }}>A major ICT-related incident affecting critical functions has been detected (Ransomware Behavior / VSS Deletion). The 4-Hour mandatory reporting window to the competent authority has commenced.</p>
+          </div>
+        )}
+
+        {doraResolved && (
+          <div style={{ background: 'rgba(34, 197, 94, 0.15)', border: '1px solid #22c55e', padding: '20px', borderRadius: '12px', marginBottom: '30px' }}>
+            <h3 style={{ color: '#22c55e', marginBottom: '10px' }}>✅ RESOLUTION REPORT: Incident Contained</h3>
+            <p style={{ color: 'var(--text-primary)' }}>
+              EDR Telemetry confirms the adversarial process was terminated and network access blocked. 
+              <br/><br/>
+              <strong>Control Mapping:</strong> NIST 800-53 IR-4 (Incident Handling) successfully executed.
+              <br/>
+              <strong>Regulatory Status:</strong> DORA Final Report generating...
+            </p>
           </div>
         )}
 
@@ -116,13 +140,19 @@ function App() {
                <h3 style={{ marginBottom: '15px', color: 'var(--accent-cyan)' }}>Splunk Universal Forwarder Feed</h3>
                <div style={{ background: '#000', padding: '15px', borderRadius: '8px', fontFamily: 'monospace', fontSize: '0.85rem', color: '#0f0', overflowY: 'auto', maxHeight: '500px' }}>
                  {siemLogs.length === 0 ? <p>Waiting for telemetry...</p> : (
-                   siemLogs.map((log, idx) => (
-                     <div key={idx} style={{ marginBottom: '10px', borderBottom: '1px solid #333', paddingBottom: '10px' }}>
-                       <span style={{ color: '#888' }}>[{log.time}]</span> <strong style={{ color: log.EventCode === '4663' ? 'var(--alert-red)' : '#0f0' }}>EventID: {log.EventCode}</strong> - {log.ProcessName}<br/>
-                       <span style={{ color: '#aaa' }}>Command: {log.CommandLine}</span><br/>
-                       <span style={{ color: '#fff' }}>{log.Message}</span>
-                     </div>
-                   ))
+                   siemLogs.map((log, idx) => {
+                     let eventColor = '#0f0'; // Default green
+                     if (log.EventCode === '4663' || log.EventCode === '4688') eventColor = 'var(--alert-red)'; // Attack
+                     if (log.EventCode === '4689' || log.EventCode === '5156') eventColor = '#22c55e'; // Containment
+
+                     return (
+                       <div key={idx} style={{ marginBottom: '10px', borderBottom: '1px solid #333', paddingBottom: '10px' }}>
+                         <span style={{ color: '#888' }}>[{log.time}]</span> <strong style={{ color: eventColor }}>EventID: {log.EventCode}</strong> - {log.ProcessName}<br/>
+                         <span style={{ color: '#aaa' }}>Command: {log.CommandLine}</span><br/>
+                         <span style={{ color: '#fff' }}>{log.Message}</span>
+                       </div>
+                     )
+                   })
                  )}
                </div>
              </div>
